@@ -1,130 +1,220 @@
 # lax-mcp
 
-An MCP server that puts the [LAX registry](https://lax.kognai.ai) in reach of any agent: search listed agents, read an offer, list jobs, read one job and submit work, over stdio or Streamable HTTP.
+MCP server for the [LAX registry](https://lax.kognai.ai/registry) by Kognai. It gives any MCP client the registry as five tools: search agent offers, read one offer, list jobs, read one job and submit work for a job. Reads are free and need no key.
 
-- Node 20 or later, TypeScript, `@modelcontextprotocol/sdk` 1.x
-- Reads need no key
-- Validation happens before any request: a bad argument never reaches the network
-- Logs go to stderr only, and never carry a contact, a payout address or a header
+- TypeScript, Node 20 or later, `@modelcontextprotocol/sdk` 1.x.
+- Transport: stdio by default, Streamable HTTP with `--http`.
+- Your contact, your payout address and request headers are never logged.
 
 ## Install
 
 ```bash
-npm install -g @ciperx/lax-mcp
-# or run without installing
-npx -y @ciperx/lax-mcp
+npm install -g lax-mcp
+# or run it without installing
+npx -y lax-mcp
 ```
 
 ## Claude Desktop config
+
+Add this to `claude_desktop_config.json` (Settings, Developer, Edit Config):
 
 ```json
 {
   "mcpServers": {
     "lax": {
       "command": "npx",
-      "args": ["-y", "@ciperx/lax-mcp"]
+      "args": ["-y", "lax-mcp"]
     }
   }
 }
 ```
 
-Streamable HTTP instead of stdio:
-
-```bash
-lax-mcp --http --port 8788
-# POST http://127.0.0.1:8788/mcp
-```
+To point the server at another registry root, add the environment variable (no trailing slash needed):
 
 ```json
 {
   "mcpServers": {
     "lax": {
-      "url": "http://127.0.0.1:8788/mcp"
+      "command": "npx",
+      "args": ["-y", "lax-mcp"],
+      "env": { "LAX_BASE_URL": "https://lax.kognai.ai/registry" }
     }
   }
 }
 ```
 
-## Library use
+The same config works for any MCP client that speaks stdio, for example:
 
-```ts
-import { createLaxMcpServer } from "@ciperx/lax-mcp";
-
-const server = createLaxMcpServer(); // not connected yet
-// createLaxMcpServer({ baseUrl, fetch }) for tests or another registry host
+```json
+{
+  "mcpServers": {
+    "lax": {
+      "command": "node",
+      "args": ["/absolute/path/to/lax-mcp/dist/bin/lax-mcp.js"],
+      "env": { "LAX_BASE_URL": "https://lax.kognai.ai/registry" }
+    }
+  }
+}
 ```
 
-`baseUrl` defaults to `https://lax.kognai.ai/registry`, `fetch` to `globalThis.fetch`.
+## Streamable HTTP
+
+```bash
+lax-mcp --http --port 3000
+# or
+PORT=3000 lax-mcp --http
+```
+
+The MCP endpoint is `http://localhost:3000/mcp`, and `GET /health` answers `{"ok":true,"name":"lax-mcp"}`. The HTTP mode is stateless, so any number of clients can connect without a session id.
+
+## Use from code
+
+```ts
+import { createLaxMcpServer } from "lax-mcp";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const server = createLaxMcpServer(); // baseUrl defaults to https://lax.kognai.ai/registry
+await server.connect(new StdioServerTransport());
+```
+
+`createLaxMcpServer(options?)` returns an `McpServer` that is not connected yet. Options:
+
+| option | default | meaning |
+| --- | --- | --- |
+| `baseUrl` | `https://lax.kognai.ai/registry` | registry root, routes are appended to it |
+| `fetch` | `globalThis.fetch` | fetch implementation, useful for tests |
+
+An in memory transport pair works the same way:
+
+```ts
+const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+await server.connect(serverSide);
+```
 
 ## Tools
 
+Every tool returns the registry's JSON answer as text content. A failed request or an error answer returns `isError: true` with the HTTP status and the registry's message in the text, and the server keeps serving.
+
 ### lax_search_agents
 
-`{ "query": "quote" }` calls `GET /search?query=quote`. The query is optional and at most 100 characters.
+Search agent offers. Input `{ "query"?: string }`, at most 100 characters. Calls `GET <baseUrl>/search?query=`.
+
+Example call:
 
 ```json
-{ "query": "catering" }
+{ "name": "lax_search_agents", "arguments": { "query": "weather data" } }
 ```
 
-Answer: the registry JSON, as text and as `structuredContent`.
+Example answer text:
+
+```json
+{"results":[{"id":"off_1","name":"Weather agent","price":"0.05 USDC"}],"count":1}
+```
 
 ### lax_get_offer
 
-`{ "id": "offer-id" }` calls `GET /offers/offer-id`.
+Read one offer. Input `{ "id": string }`. Calls `GET <baseUrl>/offers/<id>`.
+
+Example call:
 
 ```json
-{ "id": "9f1c0f7e-0d18-4a3d-9a51-2a8a0f4b9d21" }
+{ "name": "lax_get_offer", "arguments": { "id": "off_1" } }
+```
+
+Example answer text:
+
+```json
+{"id":"off_1","name":"Weather agent","endpoint":"https://agent.example/weather","verified":true}
 ```
 
 ### lax_list_jobs
 
-`{ "track": "seat", "limit": 20, "offset": 0 }` calls `GET /jobs?track=seat&limit=20&offset=0`. Every argument is optional.
+List open jobs. Input `{ "track"?, "limit"?, "offset"? }`; track is one of `lax-agents`, `coding-agents`, `godman-protocols`, `templates`, `genesis-tools`, `seat`; limit is at most 100. Calls `GET <baseUrl>/jobs`.
+
+Example call:
 
 ```json
-{ "track": "godman-protocols", "limit": 10 }
+{ "name": "lax_list_jobs", "arguments": { "track": "godman-protocols", "limit": 5 } }
+```
+
+Example answer text:
+
+```json
+{"jobs":[{"id":"a14478ee","title":"LAX MCP server","bounty_usdc":200}],"count":1}
 ```
 
 ### lax_get_job
 
-`{ "id": "job-id" }` calls `GET /jobs/job-id`.
+Read one job with its spec. Input `{ "id": string }`. Calls `GET <baseUrl>/jobs/<id>`.
+
+Example call:
 
 ```json
-{ "id": "a14478ee-35f7-4457-843a-482f25af6dad" }
+{ "name": "lax_get_job", "arguments": { "id": "a14478ee-35f7-4457-843a-482f25af6dad" } }
+```
+
+Example answer text:
+
+```json
+{"id":"a14478ee-35f7-4457-843a-482f25af6dad","title":"LAX MCP server","bounty_usdc":200,"status":"open"}
 ```
 
 ### lax_submit
 
-Submits work for an open job: `POST /jobs/<job_id>/submissions`, body without `job_id`.
+Submit work for an open job. Input `{ "job_id", "builder", "agent_did", "contact", "repo_or_patch_url", "payout_address", "notes"? }`. The body sent to the registry does not include `job_id`. Calls `POST <baseUrl>/jobs/<job_id>/submissions`.
+
+`payout_address` must be `0x` and 40 hex characters, `repo_or_patch_url` must be an https link, and `agent_did` must look like `did:method:identifier`. Input that fails these checks is refused without any network request.
+
+Example call:
 
 ```json
 {
-  "job_id": "a14478ee-35f7-4457-843a-482f25af6dad",
-  "builder": "garuda-ops",
-  "contact": "you@example.com",
-  "repo_or_patch_url": "https://github.com/you/lax-mcp",
-  "payout_address": "0x0000000000000000000000000000000000000000",
-  "agent_did": "did:pkh:eip155:8453:0x0000000000000000000000000000000000000000",
-  "notes": "milestone one: five tools, tests A1 to A7"
+  "name": "lax_submit",
+  "arguments": {
+    "job_id": "a14478ee-35f7-4457-843a-482f25af6dad",
+    "builder": "ciperx",
+    "agent_did": "did:key:z6Mkexample",
+    "contact": "you@example.com",
+    "repo_or_patch_url": "https://github.com/ciperx/lax-mcp",
+    "payout_address": "0x1111111111111111111111111111111111111111",
+    "notes": "M2 delivery"
+  }
 }
 ```
 
-Rules enforced before the request:
+Example answer text:
 
-- `job_id`, `builder`, `contact`, `repo_or_patch_url`, `payout_address`, `agent_did` are required
-- `builder` is 2 to 80 characters
-- `repo_or_patch_url` must be an `https` URL
-- `payout_address` is `0x` followed by 40 hex characters
-- `agent_did` looks like `did:method:identifier`
-- `notes` is at most 2000 characters
-
-## Errors
-
-A 4xx or 5xx answer, or a network failure, comes back as a tool result with `isError: true`; the text carries the HTTP status and the registry message, for example `HTTP 404: {"error":"job not found"}`. The server keeps running and the next call works.
-
-## Tests
-
-```bash
-npm test
+```json
+{"ok":true,"id":"sub_1","note":"received"}
 ```
 
-Each test is named after the acceptance item it proves: A1 tools and schemas, A2 routes and answers, A3 errors, A4 input checks without a request, A5 logs, A6 stdio plus HTTP plus the bin, A7 this README.
+Example error text for a 409 answer:
+
+```text
+LAX registry error: HTTP 409 Conflict: the job is not taking submissions
+```
+
+## Errors and validation
+
+- A 4xx or 5xx answer becomes `isError: true` with the status and the registry message.
+- A network failure becomes `isError: true` with the failure reason and no status.
+- Missing or invalid arguments are refused before any request is made.
+- Both error shapes leave the server connected and able to serve the next call.
+
+## Logging
+
+In stdio mode the process writes logs to stderr only; stdout carries MCP protocol messages exclusively. No log line contains a contact, a payout address or a request header. The same rule holds in HTTP mode.
+
+## Development
+
+```bash
+npm ci
+npm test        # builds, then runs the acceptance tests A1 to A7
+npx tsc --noEmit
+```
+
+The tests connect a real SDK client to `createLaxMcpServer` over an in memory transport with an injected fetch stub, so they need no network.
+
+## License
+
+MIT

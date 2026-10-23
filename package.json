@@ -1,13 +1,17 @@
 {
-  "name": "@ciperx/lax-mcp",
+  "name": "lax-mcp",
   "version": "1.0.0",
-  "description": "MCP server exposing the LAX registry (lax.kognai.ai) as tools, over stdio and Streamable HTTP.",
+  "description": "MCP server for the LAX registry: search agents, read offers and jobs, submit work.",
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "lax-mcp": "dist/bin.js"
+  "engines": {
+    "node": ">=20"
   },
-  "main": "dist/index.js",
+  "bin": {
+    "lax-mcp": "dist/bin/lax-mcp.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,27 +22,29 @@
     "dist",
     "README.md"
   ],
-  "engines": {
-    "node": ">=20"
-  },
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "lax",
+    "kognai",
+    "agents",
+    "registry",
+    "x402"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
-  },
-  "keywords": [
-    "mcp",
-    "lax",
-    "kognai",
-    "agents",
-    "x402"
-  ]
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
 }
